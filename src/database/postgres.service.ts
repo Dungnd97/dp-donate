@@ -44,6 +44,8 @@ export class PostgresService implements OnModuleInit, OnModuleDestroy {
   private async withConnection<T>(operation: (client: PoolClient) => Promise<T>): Promise<T> {
     const client = await this.pool.connect()
     try {
+      const schema = process.env.MASTER_PG_SCHEMA || 'public'
+      await client.query(`SET search_path TO ${schema}`)
       return await operation(client)
     } finally {
       client.release()
@@ -63,15 +65,38 @@ export class PostgresService implements OnModuleInit, OnModuleDestroy {
     })
   }
 
-  async executeInTransaction(queries: { sql: string; params?: any[] }[]): Promise<void> {
+  async executeInTransaction<T>(
+    queries: { sql: string; params?: any[]; returnResult?: boolean }[],
+    callback?: (client: PoolClient) => Promise<T>,
+  ): Promise<T | any[]> {
     return this.withConnection(async (client) => {
+      const results: any[] = []
+
       try {
         await client.query('BEGIN')
-        for (const { sql, params = [] } of queries) {
-          await client.query(sql, params)
+
+        for (const { sql, params = [], returnResult } of queries) {
+          const res = await client.query(sql, params)
           this.logger.debug(`Executed in transaction: ${sql}`)
+
+          if (returnResult) {
+            results.push(res.rows)
+          }
         }
+
+        let cbResult: T | undefined = undefined
+
+        if (callback) {
+          cbResult = await callback(client)
+        }
+
         await client.query('COMMIT')
+
+        // Nếu có callback -> return kết quả callback
+        if (callback) return cbResult
+
+        // Nếu chỉ 1 kết quả: return res[0], còn nhiều thì return mảng
+        return results.length === 1 ? results[0] : results
       } catch (error) {
         await client.query('ROLLBACK')
         this.logger.error('Transaction failed', error.stack)

@@ -1,29 +1,30 @@
-import {
-  CanActivate,
-  ExecutionContext,
-  Injectable,
-  UnauthorizedException,
-} from '@nestjs/common';
-import { AuthService } from './auth.service';
+import { CanActivate, ExecutionContext, Inject, Injectable, UnauthorizedException } from '@nestjs/common'
+import { ClientProxy } from '@nestjs/microservices'
+import { firstValueFrom } from 'rxjs'
 
 @Injectable()
 export class InterServiceAuthGuard implements CanActivate {
-  constructor(private readonly authService: AuthService) {}
+  constructor(@Inject('AUTH_SERVICE') private readonly authClient: ClientProxy) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest();
-    const authHeader:string = request.headers['authorization'];
+    const request = context.switchToHttp().getRequest()
+    const authHeader: string = request.headers['authorization']
 
     if (!authHeader) {
-      throw new UnauthorizedException('Missing Authorization header');
+      throw new UnauthorizedException('Thiếu Authorization header')
     }
 
+    const token = authHeader.replace(/^Bearer\s+/i, '')
+
     try {
-      const user = await this.authService.validateToken(authHeader);
-      request.user = user;
-      return true;
+      const user = await firstValueFrom(this.authClient.send('validate-token', { token }))
+
+      // Gán user vào request để controller có thể dùng
+      request.user = user
+      return true
     } catch (err) {
-      throw new UnauthorizedException(err.message || 'Token invalid');
+      console.log(err)
+      throw new UnauthorizedException('Token không hợp lệ hoặc hết hạn')
     }
   }
 }
